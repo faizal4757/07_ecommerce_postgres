@@ -33,13 +33,36 @@ def main():
     duplicate_rate = float(os.getenv("SIMULATOR_DUPLICATE_RATE", "0.02"))
     late_update_rate = float(os.getenv("SIMULATOR_LATE_UPDATE_RATE", "0.02"))
     missing_value_rate = float(os.getenv("SIMULATOR_MISSING_VALUE_RATE", "0.02"))
-    delayed_payment_rate = float(os.getenv("SIMULATOR_DELAYED_PAYMENT_RATE", "0.02"))
+    delayed_payment_rate = float(
+        os.getenv("SIMULATOR_DELAYED_PAYMENT_RATE", "0.02")
+    )
 
     now = datetime.now(timezone.utc)
+    run_id = None
 
     with connect() as conn:
         with conn.cursor() as cur:
 
+            # ---------------------------------------------------------
+            # Start simulation run audit record
+            # ---------------------------------------------------------
+            cur.execute(
+                """
+                INSERT INTO ops.simulation_runs (
+                    started_at,
+                    status
+                )
+                VALUES (%s, 'running')
+                RETURNING run_id
+                """,
+                (now,),
+            )
+
+            run_id = cur.fetchone()[0]
+
+            # ---------------------------------------------------------
+            # Validate seed data
+            # ---------------------------------------------------------
             if fetch_random(
                 cur,
                 "SELECT customer_id FROM olist.customers LIMIT 1",
@@ -365,10 +388,36 @@ def main():
                     if cur.rowcount:
                         review_rows += 1
 
+            # ---------------------------------------------------------
+            # Mark simulation run as completed
+            # ---------------------------------------------------------
+            cur.execute(
+                """
+                UPDATE ops.simulation_runs
+                SET
+                    completed_at = %s,
+                    status = 'completed',
+                    orders_created = %s,
+                    payments_created = %s,
+                    orders_updated = %s,
+                    reviews_created = %s
+                WHERE run_id = %s
+                """,
+                (
+                    datetime.now(timezone.utc),
+                    created_orders,
+                    created_payments,
+                    updated_orders,
+                    review_rows,
+                    run_id,
+                ),
+            )
+
             conn.commit()
 
             print(
                 {
+                    "run_id": run_id,
                     "orders_created": created_orders,
                     "payments_created": created_payments,
                     "orders_updated": updated_orders,
